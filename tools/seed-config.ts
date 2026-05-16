@@ -13,8 +13,7 @@ import mongoose from 'mongoose';
 import { DEFAULT_GAME_CONFIG } from '../libs/shared/game-engine/src/lib/default-config';
 
 const TENANT_ID = process.env['TENANT_ID']?.trim() || 'default';
-const MONGODB_URI =
-  process.env['MONGODB_URI'] ?? 'mongodb://localhost:27017/hand-betting-game';
+const MONGODB_URI = process.env['MONGODB_URI'] ?? "";
 
 async function main() {
   await mongoose.connect(MONGODB_URI);
