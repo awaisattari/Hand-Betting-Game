@@ -1,0 +1,12 @@
+**/node_modules
+**/dist
+**/.nx
+**/.angular
+**/coverage
+**/.git
+**/.github
+**/.env
+**/.env.*
+!**/.env.example
+**/Dockerfile*
+**/*.log

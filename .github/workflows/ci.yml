@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Lint · Test · Build
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # Nx affected needs history
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install
+        run: npm ci
+
+      # `nx affected` keeps the pipeline fast as the monorepo grows.
+      # On main pushes, run against the previous commit on main.
+      - name: Lint
+        run: npx nx affected -t lint --parallel=3
+
+      - name: Test
+        run: npx nx affected -t test --parallel=3 --ci
+
+      - name: Build
+        run: npx nx affected -t build --parallel=2

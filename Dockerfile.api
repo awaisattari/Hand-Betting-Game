@@ -1,0 +1,25 @@
+# --- build stage ---
+FROM node:20-alpine AS build
+WORKDIR /workspace
+
+# Install deps first so Docker layer-caches them across code changes.
+COPY package*.json ./
+RUN npm ci --no-audit --no-fund
+
+# Copy everything *after* deps so source edits don't bust the deps cache.
+COPY . .
+RUN npx nx build api --configuration=production
+
+# --- runtime stage ---
+FROM node:20-alpine AS runtime
+ENV NODE_ENV=production
+WORKDIR /app
+
+# Webpack's --generatePackageJson emits a slimmed package.json next to main.js.
+COPY --from=build /workspace/dist/apps/api ./
+RUN npm ci --omit=dev --no-audit --no-fund
+
+# Cloud Run injects PORT; honour it.
+ENV PORT=8080
+EXPOSE 8080
+CMD ["node", "main.js"]
