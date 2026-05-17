@@ -20,7 +20,7 @@ export class LeaderboardService {
 
     const docs = await this.gameModel
       .find({ tenantId, completed: true })
-      .sort({ score: -1, completedAt: 1 })
+      .sort({ score: -1, completedAt: -1 })
       .limit(config.leaderboardLimit)
       .lean()
       .exec();
