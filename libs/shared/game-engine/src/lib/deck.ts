@@ -42,6 +42,11 @@ export function createDynamicTileValues(config: GameConfig): DynamicTileValues {
  * Builds one fresh, unshuffled deck. Tiles are stamped with unique ids
  * so the UI can use them as stable trackBy keys; dynamic tiles also
  * carry a stable `tileKey` shared by every physical copy.
+ *
+ * The `scoringValue` set here is just a starting placeholder for tiles
+ * still in the draw pile — it gets re-stamped from `dynamicTileValues`
+ * the moment the tile is dealt into a hand. Hand tiles are the only
+ * place `scoringValue` is treated as authoritative.
  */
 export function createDeck(
   dynamicTileValues: DynamicTileValues,
@@ -58,7 +63,7 @@ export function createDeck(
         id: nextId(),
         category: 'number',
         face,
-        value: face,
+        scoringValue: face,
       });
     }
   }
@@ -71,7 +76,7 @@ export function createDeck(
         category: 'dragon',
         suit,
         tileKey: key,
-        value: dynamicTileValues[key] ?? config.nonNumberBaseValue,
+        scoringValue: dynamicTileValues[key] ?? config.nonNumberBaseValue,
       });
     }
   }
@@ -84,7 +89,7 @@ export function createDeck(
         category: 'wind',
         suit,
         tileKey: key,
-        value: dynamicTileValues[key] ?? config.nonNumberBaseValue,
+        scoringValue: dynamicTileValues[key] ?? config.nonNumberBaseValue,
       });
     }
   }
@@ -106,20 +111,25 @@ export function shuffle<T>(tiles: T[], rng: () => number = Math.random): T[] {
 }
 
 /**
- * Rewrite the current value on every dynamic tile in `tiles` so it
- * matches the authoritative `dynamicTileValues` map. Called after
- * a Dragon/Wind value changes — keeps cards in the draw pile up-to-date
- * before they get dealt.
+ * Stamp the current dynamic-tile-value onto each dynamic tile in the
+ * provided slice. Called at *deal time* only — never against hand tiles
+ * already in play. The result is a fresh array; inputs are untouched.
+ *
+ * Number tiles are returned as-is because their `scoringValue` is fixed
+ * at `face`.
  */
-export function syncTileValues(tiles: Hand, dynamicTileValues: DynamicTileValues): Hand {
+export function stampScoringValues(
+  tiles: Hand,
+  dynamicTileValues: DynamicTileValues
+): Hand {
   return tiles.map((t) => {
     if (t.category === 'number') return t;
     const nextValue = dynamicTileValues[t.tileKey];
-    if (nextValue === undefined || nextValue === t.value) return t;
-    return { ...t, value: nextValue };
+    if (nextValue === undefined || nextValue === t.scoringValue) return t;
+    return { ...t, scoringValue: nextValue };
   });
 }
 
 export function totalOfHand(hand: Hand): number {
-  return hand.reduce((sum, t) => sum + t.value, 0);
+  return hand.reduce((sum, t) => sum + t.scoringValue, 0);
 }

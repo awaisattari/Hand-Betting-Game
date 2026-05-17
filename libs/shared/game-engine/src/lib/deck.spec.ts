@@ -3,7 +3,7 @@ import {
   createDynamicTileValues,
   dragonKey,
   shuffle,
-  syncTileValues,
+  stampScoringValues,
   totalOfHand,
   windKey,
 } from './deck';
@@ -45,15 +45,15 @@ describe('deck', () => {
       expect(winds).toHaveLength(16);
     });
 
-    it('numbers carry their face value', () => {
+    it('numbers carry face as their scoringValue', () => {
       const deck = createDeck(createDynamicTileValues(baseConfig), baseConfig);
       const numbers = deck.filter((t) => t.category === 'number');
       for (const t of numbers) {
-        expect(t.value).toBe((t as { face: number }).face);
+        expect(t.scoringValue).toBe((t as { face: number }).face);
       }
     });
 
-    it('dragons/winds carry the dynamic value passed in', () => {
+    it('dragons/winds carry the dynamic value passed in as scoringValue', () => {
       const values = createDynamicTileValues(baseConfig);
       values[dragonKey('red')] = 7;
       values[windKey('east')] = 3;
@@ -63,8 +63,8 @@ describe('deck', () => {
         (t) => t.category === 'dragon' && t.suit === 'red'
       );
       const east = deck.find((t) => t.category === 'wind' && t.suit === 'east');
-      expect(red?.value).toBe(7);
-      expect(east?.value).toBe(3);
+      expect(red?.scoringValue).toBe(7);
+      expect(east?.scoringValue).toBe(3);
     });
 
     it('assigns unique ids', () => {
@@ -87,24 +87,40 @@ describe('deck', () => {
   });
 
   describe('totalOfHand', () => {
-    it('sums tile values', () => {
+    it('sums tile scoringValue snapshots', () => {
       const hand: Tile[] = [
-        { id: 'a', category: 'number', face: 4, value: 4 },
-        { id: 'b', category: 'number', face: 7, value: 7 },
+        { id: 'a', category: 'number', face: 4, scoringValue: 4 },
+        { id: 'b', category: 'number', face: 7, scoringValue: 7 },
         {
           id: 'c',
           category: 'dragon',
           suit: 'red',
           tileKey: dragonKey('red'),
-          value: 5,
+          scoringValue: 5,
         },
       ];
       expect(totalOfHand(hand)).toBe(16);
     });
+
+    it('uses the snapshot even if the dynamic map drifts afterwards', () => {
+      const hand: Tile[] = [
+        {
+          id: 'a',
+          category: 'dragon',
+          suit: 'red',
+          tileKey: dragonKey('red'),
+          scoringValue: 5, // captured at deal time
+        },
+        { id: 'b', category: 'number', face: 3, scoringValue: 3 },
+      ];
+      // Even if the global map says the red dragon is now 8, the hand
+      // total still reflects what was on the table when bets were settled.
+      expect(totalOfHand(hand)).toBe(8);
+    });
   });
 
-  describe('syncTileValues', () => {
-    it('rewrites dynamic tile values from the authoritative map', () => {
+  describe('stampScoringValues', () => {
+    it('stamps dynamic tiles with the current map value at deal time', () => {
       const values = { [dragonKey('red')]: 8 };
       const hand: Tile[] = [
         {
@@ -112,21 +128,21 @@ describe('deck', () => {
           category: 'dragon',
           suit: 'red',
           tileKey: dragonKey('red'),
-          value: 5,
+          scoringValue: 5,
         },
-        { id: 'b', category: 'number', face: 3, value: 3 },
+        { id: 'b', category: 'number', face: 3, scoringValue: 3 },
       ];
-      const synced = syncTileValues(hand, values);
-      expect(synced[0].value).toBe(8);
-      expect(synced[1].value).toBe(3);
+      const stamped = stampScoringValues(hand, values);
+      expect(stamped[0].scoringValue).toBe(8);
+      expect(stamped[1].scoringValue).toBe(3);
     });
 
     it('leaves number tiles untouched', () => {
-      const synced = syncTileValues(
-        [{ id: 'a', category: 'number', face: 5, value: 5 }],
+      const stamped = stampScoringValues(
+        [{ id: 'a', category: 'number', face: 5, scoringValue: 5 }],
         { [dragonKey('red')]: 99 }
       );
-      expect(synced[0].value).toBe(5);
+      expect(stamped[0].scoringValue).toBe(5);
     });
   });
 });

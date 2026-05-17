@@ -103,6 +103,9 @@ See `.env.example`.
   discard pile clears and the reshuffle count increments.
 - **Game over** when any dynamic tile value reaches 0 or 10, or after
   the 3rd reshuffle.
+- **Snapshot scoring**: each hand is scored using the tile values
+  captured when that hand is dealt. Dragon and Wind value changes apply
+  to future hands.
 
 ## Assumptions made
 

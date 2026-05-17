@@ -26,7 +26,7 @@ import { Tile } from '@hbg/shared-types';
       <div class="tile-face">
         <div class="tile-glyph">{{ glyph() }}</div>
         <div class="tile-label">{{ label() }}</div>
-        <div class="tile-value">{{ tile.value }}</div>
+        <div class="tile-value">{{ tile.scoringValue }}</div>
       </div>
     </div>
   `,

@@ -1,30 +1,30 @@
 import { GameConfig, GameState, Hand, Tile } from '@hbg/shared-types';
 import { createGame, placeBet } from './game-engine';
 import { DEFAULT_GAME_CONFIG } from './default-config';
-import { dragonKey, windKey } from './deck';
+import { dragonKey, totalOfHand, windKey } from './deck';
 
 /* ---------- helpers ---------- */
 
 const baseConfig: GameConfig = { ...DEFAULT_GAME_CONFIG };
 
 function numberTile(face: number, id = `n-${face}-${Math.random()}`): Tile {
-  return { id, category: 'number', face, value: face };
+  return { id, category: 'number', face, scoringValue: face };
 }
 
 function dragonTile(
   suit: 'red' | 'green' | 'white',
-  value: number,
+  scoringValue: number,
   id = `dr-${suit}-${Math.random()}`
 ): Tile {
-  return { id, category: 'dragon', suit, tileKey: dragonKey(suit), value };
+  return { id, category: 'dragon', suit, tileKey: dragonKey(suit), scoringValue };
 }
 
 function windTile(
   suit: 'east' | 'south' | 'west' | 'north',
-  value: number,
+  scoringValue: number,
   id = `w-${suit}-${Math.random()}`
 ): Tile {
-  return { id, category: 'wind', suit, tileKey: windKey(suit), value };
+  return { id, category: 'wind', suit, tileKey: windKey(suit), scoringValue };
 }
 
 /** Build a state we have full control over for deterministic transitions. */
@@ -84,6 +84,11 @@ describe('createGame', () => {
     expect(game.currentHand).toHaveLength(4);
     expect(game.dynamicTileValues[dragonKey('red')]).toBe(7);
   });
+
+  it('hand total equals the sum of the dealt tiles’ scoringValue snapshots', () => {
+    const game = createGame({ id: 'g3' });
+    expect(game.currentHandTotal).toBe(totalOfHand(game.currentHand));
+  });
 });
 
 /* ---------- betting outcomes ---------- */
@@ -97,7 +102,6 @@ describe('placeBet — outcomes', () => {
         numberTile(9, 'a'),
         numberTile(9, 'b'),
         numberTile(9, 'c'),
-        // padding so no reshuffle is needed
         ...Array.from({ length: 10 }, (_, i) => numberTile(5, `pad${i}`)),
       ],
     });
@@ -197,6 +201,100 @@ describe('placeBet — outcomes', () => {
   });
 });
 
+/* ---------- snapshot semantics (regression for the tile-total mismatch) ---------- */
+
+describe('placeBet — scoringValue snapshot semantics', () => {
+  it('current-hand total equals the sum of tile scoringValue snapshots after a win', () => {
+    const state = buildState({
+      currentHand: [numberTile(1), numberTile(1), numberTile(1)],
+      currentHandTotal: 3,
+      drawPile: [
+        dragonTile('red', 5, 'a'),
+        dragonTile('red', 5, 'b'),
+        numberTile(9, 'c'),
+        ...Array.from({ length: 10 }, (_, i) => numberTile(5, `pad${i}`)),
+      ],
+    });
+    const { state: next } = placeBet(state, 'higher');
+    expect(next.currentHandTotal).toBe(totalOfHand(next.currentHand));
+  });
+
+  it('does not mutate scoringValue on the new hand even when its tileKey drifts', () => {
+    const state = buildState({
+      currentHand: [numberTile(1), numberTile(1), numberTile(1)],
+      currentHandTotal: 3,
+      drawPile: [
+        dragonTile('red', 5, 'redA'),
+        dragonTile('red', 5, 'redB'),
+        numberTile(9, 'c'),
+        ...Array.from({ length: 10 }, (_, i) => numberTile(5, `pad${i}`)),
+      ],
+    });
+    const { state: next } = placeBet(state, 'higher');
+    // Map drifted, but the in-hand snapshots are frozen at 5.
+    expect(next.dynamicTileValues[dragonKey('red')]).toBe(7);
+    const reds = next.currentHand.filter(
+      (t) => t.category === 'dragon' && t.suit === 'red'
+    );
+    expect(reds.every((r) => r.scoringValue === 5)).toBe(true);
+  });
+
+  it('history preserves the original deal-time snapshots after drift', () => {
+    const state = buildState({
+      currentHand: [numberTile(1), numberTile(1), numberTile(1)],
+      currentHandTotal: 3,
+      drawPile: [
+        dragonTile('red', 5, 'a'),
+        windTile('east', 5, 'b'),
+        numberTile(9, 'c'),
+        ...Array.from({ length: 10 }, (_, i) => numberTile(5, `pad${i}`)),
+      ],
+    });
+    const { state: next } = placeBet(state, 'higher');
+    const entry = next.history[0];
+    expect(entry.newTotal).toBe(totalOfHand(entry.newHand));
+    const red = entry.newHand.find(
+      (t) => t.category === 'dragon' && t.suit === 'red'
+    );
+    const east = entry.newHand.find(
+      (t) => t.category === 'wind' && t.suit === 'east'
+    );
+    expect(red?.scoringValue).toBe(5);
+    expect(east?.scoringValue).toBe(5);
+    // …while the live map has already drifted to 6/6.
+    expect(next.dynamicTileValues[dragonKey('red')]).toBe(6);
+    expect(next.dynamicTileValues[windKey('east')]).toBe(6);
+  });
+
+  it('the next deal stamps fresh snapshots reflecting the post-drift map', () => {
+    // R1 win bumps red 5→6, then R2 draws another red — that tile must
+    // arrive in the hand with scoringValue 6, not 5.
+    const state = buildState({
+      currentHand: [numberTile(1), numberTile(1), numberTile(1)],
+      currentHandTotal: 3,
+      drawPile: [
+        // R1 new hand
+        dragonTile('red', 5, 'r1A'),
+        numberTile(9, 'r1B'),
+        numberTile(9, 'r1C'),
+        // R2 new hand
+        dragonTile('red', 5, 'r2A'),
+        numberTile(2, 'r2B'),
+        numberTile(2, 'r2C'),
+        ...Array.from({ length: 8 }, (_, i) => numberTile(5, `pad${i}`)),
+      ],
+    });
+    const r1 = placeBet(state, 'higher');
+    expect(r1.state.dynamicTileValues[dragonKey('red')]).toBe(6);
+    const r2 = placeBet(r1.state, 'lower');
+    const newRed = r2.state.currentHand.find(
+      (t) => t.category === 'dragon' && t.suit === 'red'
+    );
+    expect(newRed?.scoringValue).toBe(6);
+    expect(r2.state.currentHandTotal).toBe(totalOfHand(r2.state.currentHand));
+  });
+});
+
 /* ---------- dynamic tile values ---------- */
 
 describe('placeBet — Dragon/Wind value drift', () => {
@@ -250,25 +348,6 @@ describe('placeBet — Dragon/Wind value drift', () => {
     const { state: next, outcome } = placeBet(state, 'higher');
     expect(outcome).toBe('tie');
     expect(next.dynamicTileValues[dragonKey('red')]).toBe(5);
-  });
-
-  it('reflects new dynamic values on the freshly dealt hand', () => {
-    const state = buildState({
-      currentHand: [numberTile(1), numberTile(1), numberTile(1)],
-      currentHandTotal: 3,
-      drawPile: [
-        dragonTile('red', 5, 'a'),
-        dragonTile('red', 5, 'b'),
-        numberTile(9, 'c'),
-        ...Array.from({ length: 10 }, (_, i) => numberTile(5, `pad${i}`)),
-      ],
-    });
-    const { state: next } = placeBet(state, 'higher');
-    expect(next.dynamicTileValues[dragonKey('red')]).toBe(7);
-    const reds = next.currentHand.filter(
-      (t) => t.category === 'dragon' && t.suit === 'red'
-    );
-    expect(reds.every((r) => r.value === 7)).toBe(true);
   });
 });
 
@@ -328,7 +407,6 @@ describe('placeBet — game over', () => {
   });
 
   it('honours custom extremum thresholds from the injected config', () => {
-    // With maxTileValue=6, a single win on a Dragon hand ends the game.
     const config: GameConfig = { ...DEFAULT_GAME_CONFIG, maxTileValue: 6 };
     const state = buildState({
       config,

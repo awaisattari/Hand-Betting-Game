@@ -14,7 +14,7 @@ import {
   createDeck,
   createDynamicTileValues,
   shuffle,
-  syncTileValues,
+  stampScoringValues,
   totalOfHand,
 } from './deck';
 import { DEFAULT_GAME_CONFIG } from './default-config';
@@ -28,6 +28,13 @@ import { DEFAULT_GAME_CONFIG } from './default-config';
  * Each state instance carries the `GameConfig` it was built with so the
  * engine never has to reach for a global. Pass a tenant-specific config
  * into `createGame` and every subsequent `placeBet` will honour it.
+ *
+ * Snapshot semantics: every tile in a hand carries the `scoringValue`
+ * it had at the moment of the deal. The hand total, the tile cards on
+ * screen, and the history row all read from that snapshot. Dragon and
+ * Wind drift after a win or loss updates the authoritative
+ * `dynamicTileValues` map — that drives *future* deals and the side
+ * panel — but tiles already in play stay frozen.
  */
 
 export interface CreateGameOptions {
@@ -45,7 +52,7 @@ export function createGame({
   const dynamicTileValues = createDynamicTileValues(config);
   const freshDeck = shuffle(createDeck(dynamicTileValues, config, 'd0'), rng);
 
-  const { hand, remaining } = dealHand(freshDeck, config);
+  const { hand, remaining } = dealHand(freshDeck, config, dynamicTileValues);
 
   return {
     id,
@@ -69,12 +76,12 @@ export function createGame({
 /**
  * Place a bet — drives the entire round transition. Order of operations
  * matches the spec:
- *   1. draw next hand
- *   2. compare totals, decide outcome
+ *   1. draw next hand (snapshotting each tile's scoringValue at deal time)
+ *   2. compare totals (using snapshots), decide outcome
  *   3. update score
- *   4. update Dragon/Wind values on the *new* hand
- *   5. move old hand to discard
- *   6. add round to history
+ *   4. update Dragon/Wind dynamic values *for future hands*
+ *   5. move old hand to discard (snapshots preserved)
+ *   6. add round to history (snapshots preserved)
  *   7. promote new hand to current
  *   8. check game-over
  */
@@ -90,7 +97,7 @@ export function placeBet(
 
   // 1. draw next hand, possibly reshuffling first.
   const drawResult = drawNextHand(state, rng);
-  let working: GameState = drawResult.state;
+  const working: GameState = drawResult.state;
   const newHand = drawResult.hand;
   const previousHand = state.currentHand;
   const previousTotal = state.currentHandTotal;
@@ -103,28 +110,25 @@ export function placeBet(
   const scoreDelta = scoreForOutcome(outcome, config);
   const scoreAfter = working.score + scoreDelta;
 
-  // 4. update Dragon/Wind values on the *new* hand
-  const { dynamicTileValues, updatedHand } = applyDynamicValueChanges(
+  // 4. update Dragon/Wind dynamic values — applies to *future* deals.
+  //    The new hand keeps its deal-time snapshots; we never re-stamp it.
+  const dynamicTileValues = applyDynamicValueChanges(
     newHand,
     outcome,
     working.dynamicTileValues,
     config
   );
-  // any other tiles still sitting in the draw pile should reflect the
-  // change too — keeps the displayed value honest if the same tileKey
-  // shows up next round.
-  const refreshedDrawPile = syncTileValues(working.drawPile, dynamicTileValues);
 
   // 5. move previous hand to discard
   const discardPile = [...working.discardPile, ...previousHand];
 
-  // 6. history
+  // 6. history (using deal-time snapshots)
   const message = buildResultMessage(outcome, previousTotal, newTotal, scoreDelta);
   const historyEntry: RoundHistoryEntry = {
     round: state.handsPlayed,
     previousHand,
     previousTotal,
-    newHand: updatedHand,
+    newHand,
     newTotal,
     bet,
     outcome,
@@ -133,11 +137,10 @@ export function placeBet(
   };
 
   // 7. promote new hand
-  working = {
+  const next: GameState = {
     ...working,
-    drawPile: refreshedDrawPile,
     discardPile,
-    currentHand: updatedHand,
+    currentHand: newHand,
     currentHandTotal: newTotal,
     dynamicTileValues,
     score: scoreAfter,
@@ -147,15 +150,22 @@ export function placeBet(
   };
 
   // 8. game-over check
-  const overState = checkGameOver(working);
+  const overState = checkGameOver(next);
   return { state: overState, outcome, message };
 }
 
 /* ---------- internals ---------- */
 
-function dealHand(pile: Hand, config: GameConfig): { hand: Hand; remaining: Hand } {
-  const hand = pile.slice(0, config.handSize);
+function dealHand(
+  pile: Hand,
+  config: GameConfig,
+  dynamicTileValues: DynamicTileValues
+): { hand: Hand; remaining: Hand } {
+  const raw = pile.slice(0, config.handSize);
   const remaining = pile.slice(config.handSize);
+  // Stamp the deal-time snapshot onto every dynamic tile right here so
+  // every downstream consumer reads the same frozen value.
+  const hand = stampScoringValues(raw, dynamicTileValues);
   return { hand, remaining };
 }
 
@@ -173,13 +183,15 @@ function drawNextHand(
     working = reshuffle(working, rng);
   }
 
-  const { hand, remaining } = dealHand(working.drawPile, working.config);
-  // make sure dealt dynamic tiles show their *current* value
-  const refreshedHand = syncTileValues(hand, working.dynamicTileValues);
+  const { hand, remaining } = dealHand(
+    working.drawPile,
+    working.config,
+    working.dynamicTileValues
+  );
 
   return {
     state: { ...working, drawPile: remaining },
-    hand: refreshedHand,
+    hand,
   };
 }
 
@@ -228,14 +240,17 @@ function scoreForOutcome(o: BetOutcome, config: GameConfig): number {
  * Crucially, if the *same* tileKey appears twice in one hand we apply
  * the delta twice — the spec says "every time a Dragon/Wind tile is
  * part of a winning hand", and each tile is a distinct event.
+ *
+ * Returns only the updated map. The hand itself is *not* mutated — its
+ * tiles keep the snapshot value they were dealt with.
  */
 function applyDynamicValueChanges(
   hand: Hand,
   outcome: BetOutcome,
   current: DynamicTileValues,
   config: GameConfig
-): { dynamicTileValues: DynamicTileValues; updatedHand: Hand } {
-  if (outcome === 'tie') return { dynamicTileValues: current, updatedHand: hand };
+): DynamicTileValues {
+  if (outcome === 'tie') return current;
   const delta = outcome === 'win' ? +1 : -1;
   const next: DynamicTileValues = { ...current };
 
@@ -244,11 +259,7 @@ function applyDynamicValueChanges(
     const k = tile.tileKey;
     next[k] = (next[k] ?? config.nonNumberBaseValue) + delta;
   }
-
-  // re-stamp the new hand with updated values so the UI shows them
-  // immediately, before the next deal.
-  const updatedHand = syncTileValues(hand, next);
-  return { dynamicTileValues: next, updatedHand };
+  return next;
 }
 
 function checkGameOver(state: GameState): GameState {
